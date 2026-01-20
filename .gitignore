@@ -1,0 +1,43 @@
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+
+# ===== Data & Result =====
+data/
+dataset/
+result/
+output/
+
+# ===== Large files =====
+*.csv
+*.xlsx
+*.xls
+*.zip
+*.rar
+*.7z
+*.pdf
+*.docx
+*.md
+# ===== Logs =====
+*.log
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Editor =====
+.vscode/
+.idea/
+
+# ===== Latex =====
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
