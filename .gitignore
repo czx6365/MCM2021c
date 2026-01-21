@@ -13,9 +13,9 @@ result/
 output/
 
 # ===== Large files =====
-*.csv
-*.xlsx
-*.xls
+
+# *.xlsx
+# *.xls
 *.zip
 *.rar
 *.7z

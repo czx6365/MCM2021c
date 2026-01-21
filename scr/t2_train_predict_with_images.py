@@ -6,6 +6,8 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 from PIL import Image
+import torch
+from torchvision import models
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score, confusion_matrix
 
@@ -21,8 +23,8 @@ RANDOM_STATE = 42
 
 @dataclass
 class RiskPriorModel:
-    time_decay_days: float = 180.0
-    bandwidth_km: float = 50.0
+    time_decay_days: float = 180.0   #距离半年以前的确诊点影响迅速衰减
+    bandwidth_km: float = 50.0   #距离超过 50km 的点，影响显著降低
 
 
 def load_reports(path: str = DATASET_PATH) -> pd.DataFrame:
@@ -35,7 +37,7 @@ def load_reports(path: str = DATASET_PATH) -> pd.DataFrame:
     df = df[keep_cols].copy()
     df["Detection Date"] = pd.to_datetime(df["Detection Date"], errors="coerce")
     df["Submission Date"] = pd.to_datetime(df["Submission Date"], errors="coerce")
-    df = df.dropna(subset=["Detection Date", "Latitude", "Longitude"])
+    df = df.dropna(subset=["Detection Date", "Latitude", "Longitude"])#去掉这三列有空的tuple
     df["Latitude"] = df["Latitude"].astype(float)
     df["Longitude"] = df["Longitude"].astype(float)
     return df
@@ -44,8 +46,8 @@ def load_reports(path: str = DATASET_PATH) -> pd.DataFrame:
 def load_images_by_globalid(path: str = IMAGES_BY_ID_PATH) -> pd.DataFrame:
     # 读取图片索引表，统一列名并去除无文件名记录
     df = pd.read_excel(path)
-    df = df.rename(columns=str.strip)
-    df = df[df["FileName"].notna()].copy()
+    df = df.rename(columns=str.strip) #去除列名前后的空格
+    df = df[df["FileName"].notna()].copy()  #df["FileName"].notna() 空--false   
     df["FileName"] = df["FileName"].astype(str)
     return df
 
@@ -69,7 +71,7 @@ def compute_risk_prior(train_pos: pd.DataFrame,
                        query_lons: np.ndarray,
                        model: RiskPriorModel) -> np.ndarray:
     # 基于历史阳性记录，按时间衰减与空间核计算风险先验
-    if len(train_pos) == 0:
+    if len(train_pos) == 0:   #没有确诊点 → 风险为 0
         return np.zeros(len(query_dates))
 
     t_train = train_pos["Detection Date"].values.astype("datetime64[D]")
@@ -115,66 +117,66 @@ def build_image_index(img_df: pd.DataFrame) -> Dict[str, List[str]]:
     return mapping
 
 
-def _sobel_edges(gray: np.ndarray) -> np.ndarray:
-    # 简化 Sobel 边缘检测，输出梯度幅值图
-    if gray.shape[0] < 3 or gray.shape[1] < 3:
-        return np.zeros_like(gray, dtype=float)
-    g = gray.astype(float)
-    gx = (
-        -1 * g[:-2, :-2] + 1 * g[:-2, 2:] +
-        -2 * g[1:-1, :-2] + 2 * g[1:-1, 2:] +
-        -1 * g[2:, :-2] + 1 * g[2:, 2:]
-    )
-    gy = (
-        -1 * g[:-2, :-2] + -2 * g[:-2, 1:-1] + -1 * g[:-2, 2:] +
-        1 * g[2:, :-2] + 2 * g[2:, 1:-1] + 1 * g[2:, 2:]
-    )
-    mag = np.sqrt(gx ** 2 + gy ** 2)
-    return mag
+_CNN_EXTRACTOR = None
+_CNN_PREPROCESS = None
+_CNN_DEVICE = None
+
+
+def _get_cnn_extractor():
+    global _CNN_EXTRACTOR, _CNN_PREPROCESS, _CNN_DEVICE
+    if _CNN_EXTRACTOR is None:
+        device = torch.device("cpu")
+        model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        model = torch.nn.Sequential(*list(model.children())[:-1])
+        model.to(device)
+        model.eval()
+        _CNN_EXTRACTOR = model
+        _CNN_PREPROCESS = models.ResNet18_Weights.DEFAULT.transforms()
+        _CNN_DEVICE = device
+    return _CNN_EXTRACTOR, _CNN_PREPROCESS, _CNN_DEVICE
 
 
 def extract_image_features(path: str) -> Dict[str, float]:
-    # 提取单张图片的灰度统计与边缘强度特征
+    # 使用冻结的 ResNet18 提取单张图片的 CNN 向量
     try:
         with Image.open(path) as img:
-            img = img.convert("L")
-            arr = np.array(img, dtype=float)
+            img = img.convert("RGB")
     except Exception:
         return {}
 
-    h, w = arr.shape
-    mean_bright = float(arr.mean())
-    std_bright = float(arr.std())
-    aspect = float(w / h) if h > 0 else 0.0
+    model, preprocess, device = _get_cnn_extractor()
+    with torch.no_grad():
+        tensor = preprocess(img).unsqueeze(0).to(device)
+        emb = model(tensor).squeeze().cpu().numpy()
 
-    edges = _sobel_edges(arr)
-    edge_density = float((edges > 50.0).mean()) if edges.size > 0 else 0.0
-    edge_mean = float(edges.mean()) if edges.size > 0 else 0.0
-
-    return {
-        "img_w": float(w),
-        "img_h": float(h),
-        "img_aspect": aspect,
-        "img_mean": mean_bright,
-        "img_std": std_bright,
-        "img_edge_density": edge_density,
-        "img_edge_mean": edge_mean,
-    }
+    return {f"cnn_emb_{i}": float(v) for i, v in enumerate(emb.tolist())}
 
 
 def aggregate_image_features(paths: List[str]) -> Dict[str, float]:
-    # 对同一 GlobalID 的多张图片进行统计汇总
-    feats = [extract_image_features(p) for p in paths]
-    feats = [f for f in feats if f]
-    if not feats:
+    # 对同一 GlobalID 的多张图片的 CNN 向量进行统计汇总
+    model, preprocess, device = _get_cnn_extractor()
+    tensors = []
+    for p in paths:
+        try:
+            with Image.open(p) as img:
+                img = img.convert("RGB")
+            tensors.append(preprocess(img))
+        except Exception:
+            continue
+    if not tensors:
         return {}
 
-    df = pd.DataFrame(feats)
+    batch = torch.stack(tensors).to(device)
+    with torch.no_grad():
+        embs = model(batch).squeeze(-1).squeeze(-1).cpu().numpy()
+    if embs.ndim == 1:
+        embs = np.expand_dims(embs, axis=0)
+
+    df = pd.DataFrame(embs, columns=[f"cnn_emb_{i}" for i in range(embs.shape[1])])
     agg = {}
     for col in df.columns:
         agg[f"{col}_mean"] = float(df[col].mean())
-        agg[f"{col}_max"] = float(df[col].max())
-    agg["num_images"] = float(len(feats))
+    agg["num_images"] = float(len(tensors))
     return agg
 
 
@@ -224,7 +226,12 @@ def train_image_model(train_df: pd.DataFrame, image_feature_cols: List[str]) -> 
     X = df[image_feature_cols].fillna(0.0)
     y = df["y"]
 
-    model = LogisticRegression(max_iter=1000, random_state=RANDOM_STATE)
+    model = LogisticRegression(
+        max_iter=1000,
+        solver="liblinear",
+        class_weight="balanced",
+        random_state=RANDOM_STATE,
+    )
     model.fit(X, y)
     return model, float(y.mean())
 
@@ -351,14 +358,7 @@ def main():
     risk_model = RiskPriorModel()
 
     # 选择用于图像模型的特征列（若缺失则剔除）
-    image_feature_cols = [
-        "img_mean_mean",
-        "img_std_mean",
-        "img_edge_density_mean",
-        "img_edge_mean_mean",
-        "img_aspect_mean",
-    ]
-    image_feature_cols = [c for c in image_feature_cols if c in df.columns]
+    image_feature_cols = [c for c in df.columns if c.startswith("cnn_emb_")]
 
     if not image_feature_cols:
         image_feature_cols = []
