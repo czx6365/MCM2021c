@@ -26,6 +26,7 @@ class RiskPriorModel:
 
 
 def load_reports(path: str = DATASET_PATH) -> pd.DataFrame:
+    # 读取原始报告数据，保留关键字段并清洗时间与坐标
     df = pd.read_excel(path)
     keep_cols = [
         "GlobalID", "Detection Date", "Submission Date",
@@ -41,6 +42,7 @@ def load_reports(path: str = DATASET_PATH) -> pd.DataFrame:
 
 
 def load_images_by_globalid(path: str = IMAGES_BY_ID_PATH) -> pd.DataFrame:
+    # 读取图片索引表，统一列名并去除无文件名记录
     df = pd.read_excel(path)
     df = df.rename(columns=str.strip)
     df = df[df["FileName"].notna()].copy()
@@ -49,6 +51,7 @@ def load_images_by_globalid(path: str = IMAGES_BY_ID_PATH) -> pd.DataFrame:
 
 
 def _haversine_km(lat1, lon1, lat2, lon2):
+    # 计算地球表面两点之间的大圆距离（单位：公里）
     r = 6371.0
     lat1 = np.radians(lat1)
     lon1 = np.radians(lon1)
@@ -65,6 +68,7 @@ def compute_risk_prior(train_pos: pd.DataFrame,
                        query_lats: np.ndarray,
                        query_lons: np.ndarray,
                        model: RiskPriorModel) -> np.ndarray:
+    # 基于历史阳性记录，按时间衰减与空间核计算风险先验
     if len(train_pos) == 0:
         return np.zeros(len(query_dates))
 
@@ -77,6 +81,7 @@ def compute_risk_prior(train_pos: pd.DataFrame,
     dt_days = np.maximum(dt_days, 0)
     time_weight = np.exp(-dt_days / model.time_decay_days)
 
+    # 距离越远权重越小
     dist_km = _haversine_km(query_lats[:, None], query_lons[:, None], lat_train[None, :], lon_train[None, :])
     space_weight = np.exp(-(dist_km ** 2) / (2.0 * model.bandwidth_km ** 2))
 
@@ -84,6 +89,7 @@ def compute_risk_prior(train_pos: pd.DataFrame,
 
 
 def _find_image_path(filename: str) -> str:
+    # 在多个图片目录中查找文件路径
     for base in IMAGES_DIRS:
         candidate = os.path.join(base, filename)
         if os.path.exists(candidate):
@@ -92,6 +98,7 @@ def _find_image_path(filename: str) -> str:
 
 
 def build_image_index(img_df: pd.DataFrame) -> Dict[str, List[str]]:
+    # 过滤支持的图像扩展名，并建立 GlobalID 到图片路径列表的映射
     valid_ext = {".jpg", ".jpeg", ".png"}
     img_df = img_df.copy()
     img_df["ext"] = img_df["FileName"].str.lower().str.extract(r"(\.[a-z0-9]+)$", expand=False)
@@ -109,6 +116,7 @@ def build_image_index(img_df: pd.DataFrame) -> Dict[str, List[str]]:
 
 
 def _sobel_edges(gray: np.ndarray) -> np.ndarray:
+    # 简化 Sobel 边缘检测，输出梯度幅值图
     if gray.shape[0] < 3 or gray.shape[1] < 3:
         return np.zeros_like(gray, dtype=float)
     g = gray.astype(float)
@@ -126,6 +134,7 @@ def _sobel_edges(gray: np.ndarray) -> np.ndarray:
 
 
 def extract_image_features(path: str) -> Dict[str, float]:
+    # 提取单张图片的灰度统计与边缘强度特征
     try:
         with Image.open(path) as img:
             img = img.convert("L")
@@ -154,6 +163,7 @@ def extract_image_features(path: str) -> Dict[str, float]:
 
 
 def aggregate_image_features(paths: List[str]) -> Dict[str, float]:
+    # 对同一 GlobalID 的多张图片进行统计汇总
     feats = [extract_image_features(p) for p in paths]
     feats = [f for f in feats if f]
     if not feats:
@@ -169,6 +179,7 @@ def aggregate_image_features(paths: List[str]) -> Dict[str, float]:
 
 
 def add_text_features(df: pd.DataFrame) -> pd.DataFrame:
+    # 从 Notes 文本中提取简单关键词与长度特征
     df = df.copy()
     df["note"] = df["Notes"].fillna("").astype(str).str.lower()
     df["note_length"] = df["note"].str.len()
@@ -179,6 +190,7 @@ def add_text_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
+    # 生成月份与报告延迟（提交-发现）特征
     df = df.copy()
     df["month"] = df["Detection Date"].dt.month
     df["delay_days"] = (df["Submission Date"] - df["Detection Date"]).dt.days
@@ -187,6 +199,7 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_features(df: pd.DataFrame, image_index: Dict[str, List[str]]) -> pd.DataFrame:
+    # 合并图像路径、统计图像特征并补全缺失值
     df = df.copy()
     df["image_paths"] = df["GlobalID"].astype(str).map(image_index).fillna("")
     df["image_paths"] = df["image_paths"].apply(lambda x: x if isinstance(x, list) else [])
@@ -203,6 +216,7 @@ def build_features(df: pd.DataFrame, image_index: Dict[str, List[str]]) -> pd.Da
 
 
 def train_image_model(train_df: pd.DataFrame, image_feature_cols: List[str]) -> Tuple[LogisticRegression, float]:
+    # 仅在有图片的样本上训练图像子模型，并返回均值作为回退概率
     df = train_df[train_df["has_image"] == 1].copy()
     if len(df) < 5:
         return None, float(train_df["y"].mean())
@@ -217,6 +231,7 @@ def train_image_model(train_df: pd.DataFrame, image_feature_cols: List[str]) -> 
 
 def predict_prob_img(df: pd.DataFrame, model: LogisticRegression, fallback: float,
                      image_feature_cols: List[str]) -> np.ndarray:
+    # 预测图像概率；若无模型则使用回退概率
     if model is None:
         return np.full(len(df), fallback, dtype=float)
 
@@ -226,6 +241,7 @@ def predict_prob_img(df: pd.DataFrame, model: LogisticRegression, fallback: floa
 
 
 def get_time_splits(df: pd.DataFrame, min_train_periods: int = 3) -> List[Tuple[pd.Index, pd.Index]]:
+    # 生成按月滚动的训练/测试划分，用于时序评估
     df = df.copy()
     df["period"] = df["Detection Date"].dt.to_period("M")
     periods = sorted(df["period"].unique())
@@ -245,6 +261,7 @@ def evaluate_model(df: pd.DataFrame,
                    feature_cols: List[str],
                    image_feature_cols: List[str],
                    risk_model: RiskPriorModel) -> Dict[str, float]:
+    # 在滚动时间窗口上评估模型的 AUROC/AUPRC 及 Top-K uplift
     splits = get_time_splits(df)
     if not splits:
         return {}
@@ -313,21 +330,27 @@ def evaluate_model(df: pd.DataFrame,
 
 def main():
     warnings.filterwarnings("ignore")
+    # 读取原始报告数据，包含时间、地点、文本与标签等字段
     df = load_reports()
 
+    # 读取图片索引表并建立 GlobalID -> 图片路径列表的映射
     img_df = load_images_by_globalid()
     image_index = build_image_index(img_df)
     if not image_index:
         print("Warning: no image files found. Running without image features.")
 
+    # 构造文本特征与时间特征，并拼接图片统计特征
     df = add_text_features(df)
     df = add_time_features(df)
     df = build_features(df, image_index)
 
+    # 构造训练标签：Positive ID 记为 1，其余为 0
     df["y"] = (df["Lab Status"] == "Positive ID").astype(int)
 
+    # 配置时空风险先验的超参数
     risk_model = RiskPriorModel()
 
+    # 选择用于图像模型的特征列（若缺失则剔除）
     image_feature_cols = [
         "img_mean_mean",
         "img_std_mean",
@@ -340,6 +363,7 @@ def main():
     if not image_feature_cols:
         image_feature_cols = []
 
+    # 主模型的特征列：图像先验 + 时空先验 + 文本/时间/地理信息
     feature_cols = [
         "prob_img",
         "risk_prior_log",
@@ -355,6 +379,7 @@ def main():
         "num_images",
     ]
 
+    # 仅使用已有标签的数据进行滚动时间评估
     labeled = df[df["Lab Status"].isin(["Positive ID", "Negative ID"])].copy()
     splits = get_time_splits(labeled)
     if splits:
@@ -364,6 +389,7 @@ def main():
         print("Not enough time periods for rolling evaluation.")
 
     # Train final models on all labeled data
+    # 在全部有标签数据上训练最终模型并对全体样本输出概率
     labeled_pos = labeled[labeled["Lab Status"] == "Positive ID"]
     df["risk_prior"] = compute_risk_prior(
         labeled_pos,
@@ -374,9 +400,11 @@ def main():
     )
     df["risk_prior_log"] = np.log1p(df["risk_prior"])
 
+    # 训练图像子模型，预测每条样本的图像风险概率
     image_model, img_fallback = train_image_model(labeled, image_feature_cols)
     df["prob_img"] = predict_prob_img(df, image_model, img_fallback, image_feature_cols)
 
+    # 训练最终逻辑回归模型并输出正样本概率与错误概率
     labeled = df[df["Lab Status"].isin(["Positive ID", "Negative ID"])].copy()
     final_model = LogisticRegression(
         max_iter=1000,
@@ -388,6 +416,7 @@ def main():
     df["prob_positive"] = final_model.predict_proba(df[feature_cols].fillna(0.0))[:, 1]
     df["mistake_prob"] = 1.0 - df["prob_positive"]
 
+    # 保存结果到指定路径，包含概率与关键特征
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     output_cols = [
         "GlobalID", "Lab Status", "Detection Date", "Submission Date",
