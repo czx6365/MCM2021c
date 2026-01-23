@@ -1,0 +1,11 @@
+Metric,Model,Value
+auroc_mean,With Images,0.9674256020789185
+auroc_mean,Without Images,0.9751806708481515
+auprc_mean,With Images,0.28783134428295715
+auprc_mean,Without Images,0.30668131868131865
+uplift_1_mean,With Images,12.7
+uplift_1_mean,Without Images,12.7
+uplift_5_mean,With Images,18.799803921568625
+uplift_5_mean,Without Images,18.799803921568625
+uplift_10_mean,With Images,10.39857142857143
+uplift_10_mean,Without Images,10.39857142857143

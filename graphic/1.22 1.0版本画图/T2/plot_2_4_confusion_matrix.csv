@@ -1,0 +1,5 @@
+Type,Actual,Predicted,Count
+TN,0,0,1960
+FP,0,1,108
+FN,1,0,0
+TP,1,1,14

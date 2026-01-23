@@ -12,22 +12,11 @@ library(dplyr)
 library(rnaturalearth) # 用于获取地图背景
 library(sf)            # 用于处理地理空间数据
 
-# --- 2. 定义您的专属SCI期刊风格配色方案 ---
-# 将您提供的颜色方案定义为一个命名的向量，方便后续调用
-morandi_colors <- c(
-  purple_dark = "#B6B3D6",
-  purple_light = "#CFCCE3",
-  grey_purple = "#D5D3DE",
-  grey_light = "#D5D1D1",
-  nude = "#F6DFD6",
-  peach = "#F8B2A2",
-  coral = "#F1837A",
-  pink_dark = "#E9687A"
-)
+# --- 2. 定义文件路径 (使用您提供的最新路径) ---
 spatial_data_path <- "E:/美赛/2021C/code/MCM2021c/graphic/1.22 1.0版本画图/t1_spatiotemporal_data.csv"
-spatial_output_path <- "E:/美赛/2021C/code/MCM2021c/graphic/1.22 1.0版本画图/figure_1_spatiotemporal_map.svg"
+spatial_output_path <- "E:/美赛/2021C/code/MCM2021c/graphic/1.22 1.0版本画图/figure_1_spatiotemporal_map_v3.svg"
 seasonal_data_path <- "E:/美赛/2021C/code/MCM2021c/graphic/1.22 1.0版本画图/t1_seasonal_trend_data.csv"
-seasonal_output_path <- "E:/美赛/2021C/code/MCM2021c/graphic/1.22 1.0版本画图/figure_2_seasonal_trend.svg"
+seasonal_output_path <- "E:/美赛/2021C/code/MCM2021c/graphic/1.22 1.0版本画图/figure_2_seasonal_trend_v3.svg"
 
 
 # --- 3. 定义明亮的配色方案 ---
@@ -36,7 +25,6 @@ vibrant_colors <- c(
   vibrant_orange = "#F77F00",
   map_bg = "#E9ECEF"
 )
-
 
 # --- 4. 定义无标题的图形主题 ---
 theme_sci_journal <- function() {
@@ -56,19 +44,25 @@ theme_sci_journal <- function() {
     )
 }
 
-
-# --- 5. 绘制图1：时空分布图 (已修正) ---
+# --- 5. 绘制图1：时空分布图 (已应用最终修正) ---
 # 读取数据
-spatial_data <- read.csv(spatial_data_path)
+spatial_data <- read.csv(spatial_data_path, stringsAsFactors = FALSE)
+
 
 #
-# ******************** 关键修正 ********************
+# ******************** 最终关键修正 ********************
 #
-# 强制将 'year' 列转换为干净的、无空格的因子类型
-# trimws() 会移除任何可能存在的空格，factor() 则将其转为分类变量
-spatial_data$year <- factor(trimws(spatial_data$year))
+#  我们采取三步确保数据纯净：
+#  1. 强制将 year 列转为字符，防止任何非预期的格式。
+#  2. 移除所有 year 不是 "2019" 或 "2020" 的行（关键的防御性步骤）。
+#  3. 最后，将清理干净的列转为因子。
 #
-# *************************************************
+spatial_data_cleaned <- spatial_data %>%
+  mutate(year = as.character(year)) %>%
+  filter(year %in% c("2019", "2020")) %>%
+  mutate(year = factor(year))
+#
+# ******************************************************
 #
 
 # 获取地图数据
@@ -76,16 +70,15 @@ north_america <- ne_countries(scale = "medium", continent = "North America", ret
 coord_limits_x <- c(-125, -121.5)
 coord_limits_y <- c(48, 49.5)
 
-# 绘图
+# 绘图 (现在使用清理过的数据 `spatial_data_cleaned`)
 ggplot() +
   geom_sf(data = north_america, fill = vibrant_colors["map_bg"], color = "white") +
   geom_point(
-    data = spatial_data, 
+    data = spatial_data_cleaned, # <-- 使用清理后的数据
     aes(x = longitude, y = latitude, color = year), 
     size = 4,
     alpha = 0.8
   ) +
-  # 现在，这里的 "2019" 和 "2020" 将能正确匹配数据
   scale_color_manual(
     name = "Detection Year",
     values = c("2019" = vibrant_colors["vibrant_orange"], "2020" = vibrant_colors["vibrant_blue"])
@@ -97,13 +90,13 @@ ggplot() +
   ) +
   theme_sci_journal()
 
-# 保存
+# 保存 (使用 v3 后缀)
 ggsave(spatial_output_path, width = 10, height = 8)
-print(paste("已修正的图1已成功保存到:", spatial_output_path))
+print(paste("已应用最终修正的图1已保存到:", spatial_output_path))
 
 
 # --- 6. 绘制图2：季节性趋势图 (代码不变) ---
-# 读取并处理数据
+# (这部分代码通常不会有问题，保持原样)
 seasonal_data <- read.csv(seasonal_data_path)
 all_months <- data.frame(month = 1:12)
 seasonal_data_full <- all_months %>%
@@ -111,7 +104,6 @@ seasonal_data_full <- all_months %>%
   mutate(case_count = ifelse(is.na(case_count), 0, case_count))
 seasonal_data_full$month_name <- factor(month.abb[seasonal_data_full$month], levels = month.abb)
 
-# 绘图
 ggplot(seasonal_data_full, aes(x = month_name, y = case_count)) +
   geom_segment(
     aes(x = month_name, xend = month_name, y = 0, yend = case_count),
@@ -131,7 +123,6 @@ ggplot(seasonal_data_full, aes(x = month_name, y = case_count)) +
   theme_sci_journal() +
   theme(legend.position = "none")
 
-# 保存
+# 保存 (使用 v3 后缀)
 ggsave(seasonal_output_path, width = 12, height = 7)
-print(paste("已修正的图2已成功保存到:", seasonal_output_path))
-
+print(paste("已应用最终修正的图2已保存到:", seasonal_output_path))
