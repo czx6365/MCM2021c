@@ -1,0 +1,1 @@
+{'delta_star': 2, 'epsilon': 0.02, 'metric': 'auroc', 'derivative_delta': 1}
