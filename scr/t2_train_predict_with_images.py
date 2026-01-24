@@ -10,6 +10,7 @@ import torch
 from torchvision import models
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score, confusion_matrix
+import statsmodels.api as sm
 
 DATASET_PATH = r"data\\raw\\2021MCMProblemC_DataSet.xlsx"
 IMAGES_BY_ID_PATH = r"data\\raw\\2021MCM_ProblemC_ Images_by_GlobalID.xlsx"
@@ -333,6 +334,39 @@ def evaluate_model(df: pd.DataFrame,
         "num_splits": len(splits),
     }
     return metrics
+
+
+def analyze_feature_significance(df: pd.DataFrame, feature_cols: list):
+    """
+    使用 statsmodels 输出逻辑回归的详细统计报告：
+    包含：Coefficients, Standard Error, z-score, P-value, [0.025, 0.975] 置信区间
+    """
+    print("\n========== Statistical Significance Report (Logit) ==========")
+    
+    # 准备数据：添加常数项 (Intercept)
+    X = df[feature_cols].fillna(0.0).copy()
+    X = sm.add_constant(X)
+    y = df["y"]
+    
+    # 拟合模型
+    logit_model = sm.Logit(y, X)
+    try:
+        result = logit_model.fit(disp=0)
+        print(result.summary())
+        
+        # 如果需要导出到 CSV 用于论文表格
+        summary_df = pd.DataFrame({
+            "coef": result.params,
+            "std_err": result.bse,
+            "p_value": result.pvalues,
+            "conf_lower": result.conf_int()[0],
+            "conf_higher": result.conf_int()[1]
+        })
+        return summary_df
+        
+    except Exception as e:
+        print(f"Statsmodels fitting failed: {e}")
+        return None
 
 
 def main():
